@@ -16,8 +16,10 @@
     TRANSLATE=off           可选，关闭英文汉化
 """
 import argparse
+import concurrent.futures
 import datetime as dt
 import gzip
+import hashlib
 import html
 import json
 import os
@@ -32,6 +34,7 @@ from email.utils import parsedate_to_datetime
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 ROOT = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR = os.path.join(ROOT, "output")
+DOCS_DIR = os.path.join(ROOT, "docs")  # 详情页，交给 GitHub Pages 托管
 
 # 4 : 3 : 2 : 1 的内容配比
 SECTIONS = [
@@ -448,6 +451,7 @@ PAPER = "#fbf9f4"
 
 
 def render_item(item, now):
+    link = esc(item.get("detail_url") or item["link"])
     meta = "%s · %s" % (esc(item["source"]), human_time(item.get("published"), now))
     summary = clip(item.get("summary", ""), 150)
     summary_html = ('<div style="font:14px/1.7 %s;color:#4a4438;padding:6px 0 0;">%s</div>'
@@ -456,31 +460,49 @@ def render_item(item, now):
     if item.get("title_en"):
         origin_html = ('<div style="font:11px/1.5 %s;color:#a89d88;padding:5px 0 0;">原文：%s</div>'
                        % (SANS, esc(clip(item["title_en"], 90))))
+    thumb = ""
+    if item.get("image"):
+        thumb = ('<td width="98" valign="top" style="padding-right:14px;">'
+                 '<a href="%s"><img src="%s" width="98" alt="" '
+                 'style="width:98px;max-width:98px;height:74px;display:block;'
+                 'border:1px solid #e0d9c9;background:#efeade;"></a></td>'
+                 % (link, esc(item["image"])))
     return """
             <tr><td style="padding:16px 30px 16px;border-bottom:1px solid #e8e2d4;">
-              <div style="font:11px/1.4 %s;letter-spacing:.6px;color:#9c9280;text-transform:uppercase;">
-                <span style="color:%s;">■</span>&nbsp;&nbsp;%s</div>
-              <a href="%s" style="text-decoration:none;color:%s;"><div style="font:700 17px/1.5 %s;padding:5px 0 0;">%s</div></a>
-              %s%s
-            </td></tr>""" % (SANS, RED, meta, esc(item["link"]), INK, SERIF, esc(item["title"]),
+              <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0"><tr>
+                %s
+                <td valign="top">
+                  <div style="font:11px/1.4 %s;letter-spacing:.6px;color:#9c9280;text-transform:uppercase;">
+                    <span style="color:%s;">■</span>&nbsp;&nbsp;%s</div>
+                  <a href="%s" style="text-decoration:none;color:%s;"><div style="font:700 17px/1.5 %s;padding:5px 0 0;">%s</div></a>
+                  %s%s
+                </td>
+              </tr></table>
+            </td></tr>""" % (thumb, SANS, RED, meta, link, INK, SERIF, esc(item["title"]),
                             summary_html, origin_html)
 
 
 def render_headline(item, now):
+    link = esc(item.get("detail_url") or item["link"])
     summary = clip(item.get("summary", ""), 220)
     origin_html = ""
     if item.get("title_en"):
         origin_html = ('<div style="font:11px/1.5 %s;color:#a89d88;padding:6px 0 0;">原文：%s</div>'
                        % (SANS, esc(clip(item["title_en"], 110))))
+    image_html = ""
+    if item.get("image"):
+        image_html = ('<div style="padding:14px 0 0;"><a href="%s"><img src="%s" alt="" '
+                      'style="width:100%%;max-width:580px;display:block;border:1px solid #ddd5c5;"></a></div>'
+                      % (link, esc(item["image"])))
     return """
             <tr><td style="padding:22px 30px 22px;background:#f3efe3;border-top:3px double %s;border-bottom:1px solid #e0d9c9;">
               <div style="font:11px/1.4 %s;letter-spacing:2px;color:%s;font-weight:700;">头条 · HEADLINE</div>
               <a href="%s" style="text-decoration:none;color:%s;"><div style="font:700 27px/1.35 %s;padding:8px 0 0;">%s</div></a>
               <div style="font:14px/1.75 %s;color:#4a4438;padding:8px 0 0;">%s</div>
-              %s
+              %s%s
               <div style="font:11px/1.4 %s;color:#9c9280;padding:8px 0 0;">%s · %s</div>
-            </td></tr>""" % (INK, SANS, RED, esc(item["link"]), INK, SERIF, esc(item["title"]),
-                            SANS, esc(summary), origin_html, SANS, esc(item["source"]),
+            </td></tr>""" % (INK, SANS, RED, link, INK, SERIF, esc(item["title"]),
+                            SANS, esc(summary), origin_html, image_html, SANS, esc(item["source"]),
                             human_time(item.get("published"), now))
 
 
@@ -522,7 +544,7 @@ def render_html(buckets, now, issue_no):
 <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" style="background:#ece7dc;">
 <tr><td align="center" style="padding:24px 12px;">
   <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0"
-         style="width:640px;max-width:640px;background:%(paper)s;border:1px solid #ddd5c5;">
+         style="width:100%%;max-width:640px;background:%(paper)s;border:1px solid #ddd5c5;">
 
     <tr><td style="padding:30px 30px 0;text-align:center;">
       <div style="font:11px/1.6 %(sans)s;letter-spacing:4px;color:#a89d88;">DAILY AI INTELLIGENCE · NO.%(issue)s</div>
@@ -566,6 +588,144 @@ def render_html(buckets, now, issue_no):
         "sources": esc(sources),
         "stamp": now.strftime("%Y-%m-%d %H:%M"),
     }
+
+
+# ---------------------------------------------------------------- 配图与详情页
+
+_OG_PATTERNS = (
+    r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+    r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+    r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)',
+)
+
+
+def og_image(url):
+    """从原文页抓 og:image 作为缩略图，失败就留空（不显示破图）。"""
+    if not url:
+        return ""
+    try:
+        raw = fetch(url, timeout=15)[:400000].decode("utf-8", "replace")
+    except Exception:
+        return ""
+    for pattern in _OG_PATTERNS:
+        match = re.search(pattern, raw, re.I)
+        if match:
+            src = html.unescape(match.group(1).strip())
+            if src.startswith("//"):
+                src = "https:" + src
+            return urllib.parse.urljoin(url, src)
+    return ""
+
+
+def attach_images(buckets):
+    plain = [it for key, items in buckets.items() if key != "github" for it in items]
+    for items in buckets.values():
+        for item in items:
+            if item["section"] == "github":  # GitHub 自带社交预览图，无需再抓
+                item["image"] = "https://opengraph.githubassets.com/1/" + item["title"]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        for item, image in zip(plain, pool.map(lambda it: og_image(it["link"]), plain)):
+            item["image"] = image
+    got = sum(1 for items in buckets.values() for it in items if it.get("image"))
+    print("配图 %d/%d 条" % (got, sum(len(v) for v in buckets.values())), file=sys.stderr)
+    return buckets
+
+
+def pages_base():
+    explicit = os.environ.get("PAGES_BASE", "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    repo = os.environ.get("GITHUB_REPOSITORY", "").strip()  # Actions 里形如 owner/name
+    if "/" in repo:
+        owner, name = repo.split("/", 1)
+        return "https://%s.github.io/%s" % (owner, name)
+    return ""
+
+
+def slugify(item, index):
+    base = re.sub(r"[^a-z0-9]+", "-", (item["title"] or "").lower()).strip("-")[:40]
+    if not base:  # 纯中文标题
+        base = hashlib.md5(item["link"].encode("utf-8")).hexdigest()[:10]
+    return "%02d-%s" % (index, base)
+
+
+DETAIL_TPL = """<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title} · AI 日报</title></head>
+<body style="margin:0;padding:0;background:#ece7dc;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#ece7dc;">
+<tr><td align="center" style="padding:24px 12px;">
+  <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0"
+         style="width:100%;max-width:640px;background:#fbf9f4;border:1px solid #ddd5c5;">
+    <tr><td style="padding:18px 30px;border-bottom:2px solid #14110f;">
+      <a href="{index_url}" style="text-decoration:none;color:#14110f;font:700 16px/1 Georgia,'Songti SC',serif;letter-spacing:2px;">AI 日报</a>
+      <span style="font:11px/1 -apple-system,sans-serif;color:#9c9280;">&nbsp;&nbsp;NO.{issue} · {date}</span>
+    </td></tr>
+    <tr><td style="padding:26px 30px 0;">
+      <div style="font:700 11px/1 -apple-system,sans-serif;letter-spacing:2px;color:#b5322a;">{section_en} · {section_cn}</div>
+      <h1 style="margin:12px 0 0;font:700 30px/1.4 Georgia,'Songti SC',serif;color:#14110f;">{title}</h1>
+      <div style="padding-top:12px;font:12px/1.6 -apple-system,sans-serif;color:#9c9280;">{source} · {when}</div>
+    </td></tr>
+    {image}
+    <tr><td style="padding:24px 30px 0;">
+      {original}
+      <div style="font:15px/1.95 -apple-system,sans-serif;color:#3c372d;">{summary}</div>
+    </td></tr>
+    <tr><td style="padding:26px 30px 34px;">
+      <div style="height:1px;background:#d8d0be;margin-bottom:20px;"></div>
+      <a href="{orig}" style="display:inline-block;background:#14110f;color:#fbf9f4;text-decoration:none;font:600 13px/1 -apple-system,sans-serif;padding:12px 22px;">阅读原文 →</a>
+      <a href="{index_url}" style="display:inline-block;margin-left:14px;color:#6b6250;text-decoration:none;font:13px/1 -apple-system,sans-serif;padding:12px 0;">← 返回本期日报</a>
+      <div style="padding-top:18px;font:11px/1.8 -apple-system,sans-serif;color:#a89d88;">原文链接：{orig}<br>摘要由机器翻译整理，准确表述请以原文为准。</div>
+    </td></tr>
+  </table>
+</td></tr></table>
+</body></html>"""
+
+
+def render_detail(item, section_cn, section_en, now, issue_no, index_url):
+    image_html = ""
+    if item.get("image"):
+        image_html = ('<tr><td style="padding:20px 30px 0;">'
+                      '<img src="%s" alt="" style="width:100%%;max-width:580px;display:block;'
+                      'border:1px solid #e0d9c9;"></td></tr>' % esc(item["image"]))
+    original_html = ""
+    if item.get("title_en"):
+        original_html = ('<div style="font:12px/1.7 -apple-system,sans-serif;color:#9c9280;'
+                         'padding-bottom:12px;">原文标题：%s</div>' % esc(item["title_en"]))
+    summary = esc(item.get("summary") or "该条暂无摘要，可点击下方按钮阅读原文。")
+    return DETAIL_TPL.format(
+        title=esc(item["title"]),
+        index_url=esc(index_url),
+        issue=issue_no,
+        date=now.strftime("%Y-%m-%d"),
+        section_en=esc(section_en),
+        section_cn=esc(section_cn),
+        source=esc(item["source"]),
+        when=human_time(item.get("published"), now),
+        image=image_html,
+        original=original_html,
+        summary=summary,
+        orig=esc(item["link"]),
+    )
+
+
+def build_detail_pages(buckets, now, issue_no):
+    day = now.strftime("%Y-%m-%d")
+    out_dir = os.path.join(DOCS_DIR, day)
+    os.makedirs(out_dir, exist_ok=True)
+    base = pages_base()
+    index_url = ("%s/%s/index.html" % (base, day)) if base else "index.html"
+    index = 0
+    for key, title_cn, en, _need in SECTIONS:
+        for item in buckets.get(key, []):
+            index += 1
+            name = slugify(item, index) + ".html"
+            item["detail_url"] = ("%s/%s/%s" % (base, day, name)) if base else name
+            with open(os.path.join(out_dir, name), "w", encoding="utf-8") as fh:
+                fh.write(render_detail(item, title_cn, en, now, issue_no, index_url))
+    print("详情页 %d 个 -> %s" % (index, out_dir), file=sys.stderr)
+    return out_dir
 
 
 # ---------------------------------------------------------------- 发信
@@ -654,14 +814,22 @@ def main():
     print("汉化中 ...", file=sys.stderr)
     localize(buckets)
 
+    print("抓取缩略图 ...", file=sys.stderr)
+    attach_images(buckets)
+
     issue_no = local.strftime("%Y%m%d")
+    day_dir = build_detail_pages(buckets, local, issue_no)
+
     page = render_html(buckets, local, issue_no)
 
     os.makedirs(OUT_DIR, exist_ok=True)
     path = os.path.join(OUT_DIR, local.strftime("%Y-%m-%d") + ".html")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(page)
+    with open(os.path.join(day_dir, "index.html"), "w", encoding="utf-8") as fh:
+        fh.write(page)  # 供 GitHub Pages 访问的列表页
     print("HTML 已生成：%s" % path, file=sys.stderr)
+    print("详情页目录：%s" % day_dir, file=sys.stderr)
 
     subject = "AI 日报 · %s · %d 条精选" % (local.strftime("%m/%d"), sum(len(v) for v in buckets.values()))
     if args.dry_run:

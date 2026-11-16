@@ -7,12 +7,12 @@ on:
   workflow_dispatch: {}   # 支持在 Actions 页面手动触发一次，方便测试
 
 permissions:
-  contents: read
+  contents: write   # 需要把详情页提交回仓库，供 GitHub Pages 托管
 
 jobs:
   daily:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -27,6 +27,18 @@ jobs:
           MAIL_TO: ${{ secrets.MAIL_TO }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python main.py
+
+      - name: 发布详情页
+        run: |
+          git config user.name "ai-daily-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs
+          if git diff --staged --quiet; then
+            echo "没有新的详情页"
+          else
+            git commit -m "chore: 发布 $(date -u -d '+8 hour' +%F) 日报详情页"
+            git push
+          fi
 
       - name: 存档本期 HTML
         if: always()
