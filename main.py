@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""AI 日报：抓取公开信息源 -> 打分筛选 -> 排成报纸 -> 发到邮箱。
+"""AI 日报：抓取公开信息源 -> 抓正文 -> 打分筛选 -> 排成报纸 -> 发到邮箱。
 
 用法：
     python main.py --dry-run     # 只生成 output/日期.html，不发信（可本地预览）
@@ -51,9 +51,9 @@ FEEDS = [
     ("models", "Google DeepMind", "https://deepmind.google/blog/rss.xml", 1.5),
     ("models", "MIT Tech Review", "https://www.technologyreview.com/topic/artificial-intelligence/feed", 1.3),
     ("models", "Google News AI",
-     "https://news.google.com/rss/search?q=AI+OR+%22large+language+model%22+OR+GPT+OR+Gemini+OR+Claude+when:1d&hl=en-US&gl=US&ceid=US:en", 1.2),
+     "https://news.google.com/rss/search?q=AI+OR+%22large+language+model%22+OR+GPT+OR+Gemini+OR+Claude+when:1d&hl=en-US&gl=US&ceid=US:en", 0.9),
     ("models", "Google News 中文",
-     "https://news.google.com/rss/search?q=%E5%A4%A7%E6%A8%A1%E5%9E%8B+OR+%E6%99%BA%E8%83%BD%E4%BD%93+OR+%E7%94%9F%E6%88%90%E5%BC%8FAI+when:1d&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", 1.2),
+     "https://news.google.com/rss/search?q=%E5%A4%A7%E6%A8%A1%E5%9E%8B+OR+%E6%99%BA%E8%83%BD%E4%BD%93+OR+%E7%94%9F%E6%88%90%E5%BC%8FAI+when:1d&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", 0.9),
     ("industry", "TechCrunch AI", "https://techcrunch.com/category/artificial-intelligence/feed/", 1.3),
     ("industry", "The Verge AI", "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", 1.1),
     ("industry", "VentureBeat AI", "https://venturebeat.com/category/ai/feed/", 1.1),
@@ -345,19 +345,21 @@ LLM_KEY = os.environ.get("LLM_API_KEY", "").strip()
 LLM_BASE = (os.environ.get("LLM_BASE") or "https://discovery-api.intern-ai.org.cn/v1").rstrip("/")
 LLM_MODEL = os.environ.get("LLM_MODEL") or "deepseek-v4.1-flash-1017"
 LLM_WORKERS = 2
-# 哪些栏目走大模型（其余走机器翻译）。可用 LLM_SECTIONS 环境变量覆盖，如 models,github,industry,tech
-LLM_SECTIONS = tuple(s.strip() for s in (os.environ.get("LLM_SECTIONS") or "github,tech").split(",") if s.strip())
+# 哪些栏目走大模型（其余走机器翻译）。可用 LLM_SECTIONS 环境变量覆盖，如 github,tech
+LLM_SECTIONS = tuple(s.strip() for s in
+                     (os.environ.get("LLM_SECTIONS") or "models,github,industry,tech").split(",") if s.strip())
 
-BRIEF_PROMPT = """你是中文科技媒体的值班编辑，把英文 AI 资讯改写成可直接阅读的中文简报。
+BRIEF_PROMPT = """你是中文科技媒体的值班编辑，根据原文素材写一条可直接阅读的中文简报。
 来源：{source}（栏目：{section}）
-标题：{title}
-导语：{desc}
+英文标题：{title}
+原文内容：
+{desc}
 
 只输出 JSON，不要代码块、不要解释：
-{{"title": "中文标题，20 字以内，不用感叹号和营销词",
- "summary": "中文摘要，120-200 字，2-4 句：第一句说清发生了什么，第二句补充关键数字/技术细节，第三句说这意味着什么。不要复述标题，不要用「本文」「该文章」这类词",
+{{"title": "中文标题，22 字以内，不用感叹号和营销词",
+ "summary": "中文摘要，150-250 字，3-5 句：先说发生了什么，再给关键数字/技术细节/涉及的公司产品，最后说影响或看点。用自己的话组织，不要复述标题，不要用「本文」「该文章」这类词",
  "points": ["要点一（25 字内，具体事实）", "要点二", "要点三"]}}
-导语信息不足时只写导语里有的信息，绝不编造数字或评论。"""
+只能使用原文里出现的信息，绝不编造数字；素材不足就写得短一些。"""
 
 
 def parse_json_loose(text):
@@ -378,7 +380,7 @@ def llm_brief(item):
         return None
     prompt = BRIEF_PROMPT.format(
         source=item["source"], section=item["section"], title=item["title"],
-        desc=(item.get("desc") or item.get("summary") or "")[:800])
+        desc=(item.get("body") or item.get("desc") or item.get("summary") or "")[:3500])
     payload = {"model": LLM_MODEL,
                "messages": [{"role": "user", "content": prompt}],
                "temperature": 0.3, "max_tokens": 4000}
@@ -512,7 +514,7 @@ def localize(buckets):
             if title_zh and title_zh != item["title"]:
                 item["title_en"] = item["title"]
                 item["title"] = title_zh
-            item["summary"] = tidy_summary(item["title"], translate(item.get("summary") or ""))
+            item["summary"] = tidy_summary(item["title"], translate(item.get("body") or item.get("summary") or ""))
     return buckets
 
 
@@ -718,14 +720,7 @@ _OG_PATTERNS = (
 )
 
 
-def og_image(url):
-    """从原文页抓 og:image 作为缩略图，失败就留空（不显示破图）。"""
-    if not url:
-        return ""
-    try:
-        raw = fetch(url, timeout=15)[:400000].decode("utf-8", "replace")
-    except Exception:
-        return ""
+def extract_og(raw, url):
     for pattern in _OG_PATTERNS:
         match = re.search(pattern, raw, re.I)
         if match:
@@ -736,17 +731,70 @@ def og_image(url):
     return ""
 
 
-def attach_images(buckets):
+def extract_body(raw):
+    """粗略抽正文：优先 <article>，去掉脚本、导航、页脚等噪音。"""
+    text = re.sub(r"<(script|style|nav|header|footer|aside|form|svg)[^>]*>.*?</\1>", " ",
+                  raw, flags=re.S | re.I)
+    match = re.search(r"<article[^>]*>(.*?)</article>", text, re.S | re.I)
+    if match:
+        text = match.group(1)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:4000]
+
+
+def _fetch_once(url):
+    try:
+        raw = fetch(url, timeout=15)[:600000].decode("utf-8", "replace")
+    except Exception:
+        return "", ""
+    return extract_og(raw, url), extract_body(raw)
+
+
+def resolve_google_news(url):
+    """Google News 的 /rss/articles/ 是跳转页，从中还原出原文站链接。"""
+    try:
+        raw = fetch(url, timeout=12).decode("utf-8", "replace")
+    except Exception:
+        return ""
+    for pattern in (r'href="(https?://(?!news\.google\.com|www\.google\.com)[^"]+)"',
+                    r'data-n-au="(https?://[^"]+)"'):
+        match = re.search(pattern, raw)
+        if match:
+            return html.unescape(match.group(1))
+    return ""
+
+
+def fetch_source(url):
+    """一次请求同时拿到缩略图和正文；Google News 链接会尝试还原原文后再抓一次。"""
+    if not url:
+        return "", ""
+    image, body = _fetch_once(url)
+    if len(body) < 300 and "news.google.com" in url:
+        real = resolve_google_news(url)
+        if real:
+            image2, body2 = _fetch_once(real)
+            return image2 or image, body2 or body
+    return image, body
+
+
+def enrich_sources(buckets):
+    """给非 GitHub 条目补缩略图和原文正文（正文喂给模型写摘要）。"""
     plain = [it for key, items in buckets.items() if key != "github" for it in items]
     for items in buckets.values():
         for item in items:
             if item["section"] == "github":  # GitHub 自带社交预览图，无需再抓
                 item["image"] = "https://opengraph.githubassets.com/1/" + item["title"]
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        for item, image in zip(plain, pool.map(lambda it: og_image(it["link"]), plain)):
+        for item, (image, body) in zip(plain, pool.map(lambda it: fetch_source(it["link"]), plain)):
             item["image"] = image
-    got = sum(1 for items in buckets.values() for it in items if it.get("image"))
-    print("配图 %d/%d 条" % (got, sum(len(v) for v in buckets.values())), file=sys.stderr)
+            item["body"] = body
+    total = sum(len(v) for v in buckets.values())
+    got_img = sum(1 for items in buckets.values() for it in items if it.get("image"))
+    got_body = sum(1 for items in buckets.values() for it in items
+                   if len(it.get("body") or "") > 300)
+    print("配图 %d/%d 条，正文 %d/%d 条" % (got_img, total, got_body, total), file=sys.stderr)
     return buckets
 
 
@@ -985,11 +1033,11 @@ def main():
     if not any(buckets.values()):
         raise SystemExit("所有来源均无有效内容，今日不发送（可能是网络或源变更）。")
 
-    print("汉化中 ...", file=sys.stderr)
-    localize(buckets)
+    print("抓取缩略图与原文正文 ...", file=sys.stderr)
+    enrich_sources(buckets)
 
-    print("抓取缩略图 ...", file=sys.stderr)
-    attach_images(buckets)
+    print("汉化与总结 ...", file=sys.stderr)
+    localize(buckets)
 
     issue_no = local.strftime("%Y%m%d")
     day_dir = build_detail_pages(buckets, local, issue_no)
