@@ -471,6 +471,22 @@ def translate(text):
     return text
 
 
+def tidy_summary(title, summary):
+    """机器翻译的摘要常是「标题 + 媒体名」，去掉与标题重复的部分；剩不下有效信息就不显示。"""
+    title = (title or "").strip()
+    summary = (summary or "").strip()
+    if not summary:
+        return ""
+    if title:
+        if summary.startswith(title):
+            summary = summary[len(title):].strip(" -—|，,。:：")
+        elif title in summary and summary.index(title) < 10:
+            summary = (summary[:summary.index(title)] + summary[summary.index(title) + len(title):]).strip(" -—|，,。:：")
+    if title and (not summary or len(summary) < 20):  # 只剩媒体名之类，宁可不显示
+        return ""
+    return summary
+
+
 def localize(buckets):
     items = [it for its in buckets.values() for it in its]
     targets = [it for it in items if it["section"] in LLM_SECTIONS]
@@ -496,7 +512,7 @@ def localize(buckets):
             if title_zh and title_zh != item["title"]:
                 item["title_en"] = item["title"]
                 item["title"] = title_zh
-            item["summary"] = translate(item.get("summary") or "")
+            item["summary"] = tidy_summary(item["title"], translate(item.get("summary") or ""))
     return buckets
 
 
@@ -804,7 +820,7 @@ def render_detail(item, section_cn, section_en, now, issue_no, index_url):
     if item.get("title_en"):
         original_html = ('<div style="font:12px/1.7 -apple-system,sans-serif;color:#9c9280;'
                          'padding-bottom:12px;">原文标题：%s</div>' % esc(item["title_en"]))
-    summary = esc(item.get("summary") or "该条暂无摘要，可点击下方按钮阅读原文。")
+    summary = esc(item.get("summary") or "该条暂无摘要，可直接阅读原文。")
     return DETAIL_TPL.format(
         title=esc(item["title"]),
         index_url=esc(index_url),
