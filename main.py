@@ -174,7 +174,7 @@ def parse_feed(xml_bytes, source):
         published = parse_date(date_el.text if date_el is not None else "") if date_el is not None else None
         if not title or not link:
             continue
-        if source == "Google News" and " - " in title:
+        if source.startswith("Google News") and " - " in title:  # 去掉「 - 观点网」这类来源尾巴
             title = title.rsplit(" - ", 1)[0]
         items.append({"title": title, "link": link, "summary": desc,
                       "published": published, "source": source})
@@ -479,6 +479,8 @@ def localize(buckets):
                 if brief and apply_brief(item, brief):
                     done.add(id(item))
         print("  AI 总结成功 %d/%d" % (len(done), len(items)), file=sys.stderr)
+    else:
+        print("  ! 未配置 LLM_API_KEY，跳过 AI 总结，仅用机器翻译", file=sys.stderr)
     for item in items:
         if id(item) in done:
             continue
@@ -824,6 +826,44 @@ def build_detail_pages(buckets, now, issue_no):
     return out_dir
 
 
+def write_archive_index(now):
+    """站点首页：列出所有往期，方便随时回看。"""
+    days = sorted((d for d in os.listdir(DOCS_DIR) if re.match(r"^\d{4}-\d{2}-\d{2}$", d)), reverse=True)
+    rows = []
+    for day in days:
+        page = os.path.join(DOCS_DIR, day, "index.html")
+        if not os.path.exists(page):
+            continue
+        count = len(re.findall(r"font:700 17px", open(page, encoding="utf-8").read())) + 1
+        rows.append('<li style="margin:0 0 12px;font:15px/1.6 %s;">'
+                    '<a href="%s/index.html" style="color:#14110f;text-decoration:none;">'
+                    '%s 第 %d 条</a></li>' % (SANS, day, day, count))
+    body = "".join(rows) or '<li style="font:15px/1.6 %s;color:#9c9280;">还没有出刊</li>' % SANS
+    page = """<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI 日报 · 往期</title></head>
+<body style="margin:0;padding:0;background:#ece7dc;">
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" style="background:#ece7dc;">
+<tr><td align="center" style="padding:24px 12px;">
+  <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0"
+         style="width:100%%;max-width:640px;background:#fbf9f4;border:1px solid #ddd5c5;">
+    <tr><td style="padding:30px 30px 18px;text-align:center;border-bottom:2px solid #14110f;">
+      <div style="font:11px/1.6 %s;letter-spacing:4px;color:#a89d88;">ARCHIVE</div>
+      <div style="font:700 38px/1.2 %s;color:#14110f;letter-spacing:3px;padding-top:6px;">AI 日报 · 往期</div>
+      <div style="font:12px/1.6 %s;color:#7d7360;padding-top:8px;">每天北京时间 09:00 自动出刊</div>
+    </td></tr>
+    <tr><td style="padding:24px 30px 34px;">
+      <ul style="margin:0;padding-left:20px;color:#3c372d;">%s</ul>
+    </td></tr>
+  </table>
+</td></tr></table>
+</body></html>""" % (SANS, SERIF, SANS, body)
+    with open(os.path.join(DOCS_DIR, "index.html"), "w", encoding="utf-8") as fh:
+        fh.write(page)
+    print("归档首页 -> docs/index.html（%d 期）" % len(days), file=sys.stderr)
+
+
 # ---------------------------------------------------------------- 发信
 
 def send_email(subject, html_body, to_list):
@@ -896,6 +936,11 @@ def main():
     now = dt.datetime.now(dt.timezone.utc)
     local = now.astimezone(dt.timezone(dt.timedelta(hours=8)))
     print("抓取中 %s ..." % local.strftime("%Y-%m-%d %H:%M"), file=sys.stderr)
+    print("配置自检：LLM_API_KEY=%s（模型 %s）| SMTP_USER=%s | MAIL_TO=%s | PAGES_BASE=%s"
+          % ("已设置" if LLM_KEY else "未设置", LLM_MODEL,
+             "已设置" if os.environ.get("SMTP_USER") else "未设置",
+             "已设置" if os.environ.get("MAIL_TO") else "未设置",
+             pages_base() or "未设置"), file=sys.stderr)
 
     items = fetch_feeds() + fetch_github(now) + fetch_hn(now)
     print("共抓取 %d 条，去重排序中 ..." % len(items), file=sys.stderr)
@@ -924,6 +969,7 @@ def main():
         fh.write(page)
     with open(os.path.join(day_dir, "index.html"), "w", encoding="utf-8") as fh:
         fh.write(page)  # 供 GitHub Pages 访问的列表页
+    write_archive_index(local)
     print("HTML 已生成：%s" % path, file=sys.stderr)
     print("详情页目录：%s" % day_dir, file=sys.stderr)
 
