@@ -345,6 +345,8 @@ LLM_KEY = os.environ.get("LLM_API_KEY", "").strip()
 LLM_BASE = (os.environ.get("LLM_BASE") or "https://discovery-api.intern-ai.org.cn/v1").rstrip("/")
 LLM_MODEL = os.environ.get("LLM_MODEL") or "deepseek-v4.1-flash-1017"
 LLM_WORKERS = 2
+# 哪些栏目走大模型（其余走机器翻译）。可用 LLM_SECTIONS 环境变量覆盖，如 models,github,industry,tech
+LLM_SECTIONS = tuple(s.strip() for s in (os.environ.get("LLM_SECTIONS") or "github,tech").split(",") if s.strip())
 
 BRIEF_PROMPT = """你是中文科技媒体的值班编辑，把英文 AI 资讯改写成可直接阅读的中文简报。
 来源：{source}（栏目：{section}）
@@ -471,16 +473,18 @@ def translate(text):
 
 def localize(buckets):
     items = [it for its in buckets.values() for it in its]
+    targets = [it for it in items if it["section"] in LLM_SECTIONS]
     done = set()
-    if LLM_KEY:
-        print("  AI 总结 %d 条（%s）..." % (len(items), LLM_MODEL), file=sys.stderr)
+    if LLM_KEY and targets:
+        print("  AI 总结 %d/%d 条（%s，栏目 %s）..."
+              % (len(targets), len(items), LLM_MODEL, ",".join(LLM_SECTIONS)), file=sys.stderr)
         with concurrent.futures.ThreadPoolExecutor(max_workers=LLM_WORKERS) as pool:
-            for item, brief in zip(items, pool.map(llm_brief, items)):
+            for item, brief in zip(targets, pool.map(llm_brief, targets)):
                 if brief and apply_brief(item, brief):
                     done.add(id(item))
-        print("  AI 总结成功 %d/%d" % (len(done), len(items)), file=sys.stderr)
-    else:
-        print("  ! 未配置 LLM_API_KEY，跳过 AI 总结，仅用机器翻译", file=sys.stderr)
+        print("  AI 总结成功 %d/%d；其余走机器翻译" % (len(done), len(targets)), file=sys.stderr)
+    elif not LLM_KEY:
+        print("  ! 未配置 LLM_API_KEY，全部走机器翻译", file=sys.stderr)
     for item in items:
         if id(item) in done:
             continue
@@ -949,8 +953,8 @@ def main():
     now = dt.datetime.now(dt.timezone.utc)
     local = now.astimezone(dt.timezone(dt.timedelta(hours=8)))
     print("抓取中 %s ..." % local.strftime("%Y-%m-%d %H:%M"), file=sys.stderr)
-    print("配置自检：LLM_API_KEY=%s（模型 %s）| SMTP_USER=%s | MAIL_TO=%s | PAGES_BASE=%s"
-          % ("已设置" if LLM_KEY else "未设置", LLM_MODEL,
+    print("配置自检：LLM_API_KEY=%s（模型 %s，栏目 %s）| SMTP_USER=%s | MAIL_TO=%s | PAGES_BASE=%s"
+          % ("已设置" if LLM_KEY else "未设置", LLM_MODEL, ",".join(LLM_SECTIONS) or "无",
              "已设置" if os.environ.get("SMTP_USER") else "未设置",
              "已设置" if os.environ.get("MAIL_TO") else "未设置",
              pages_base() or "未设置"), file=sys.stderr)
