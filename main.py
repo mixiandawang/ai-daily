@@ -380,17 +380,17 @@ def llm_brief(item):
     payload = {"model": LLM_MODEL,
                "messages": [{"role": "user", "content": prompt}],
                "temperature": 0.3, "max_tokens": 4000}
-    for attempt in range(3):
+    for attempt in range(2):
         try:
             raw = fetch(LLM_BASE + "/chat/completions",
                         headers={"Authorization": "Bearer " + LLM_KEY,
                                  "Content-Type": "application/json"},
-                        data=json.dumps(payload).encode("utf-8"), method="POST", timeout=180)
+                        data=json.dumps(payload).encode("utf-8"), method="POST", timeout=90)
             content = (json.loads(raw.decode("utf-8")).get("choices") or [{}])[0].get("message", {}).get("content") or ""
             return parse_json_loose(content)
         except urllib.error.HTTPError as exc:
-            if exc.code == 429 and attempt < 2:  # 限流：等一会儿再试
-                time.sleep(4 * (attempt + 1))
+            if exc.code == 429 and attempt < 1:  # 限流：等一会儿再试
+                time.sleep(5)
                 continue
             print("  ! LLM HTTP %s" % exc.code, file=sys.stderr)
             return None
@@ -812,6 +812,9 @@ def build_detail_pages(buckets, now, issue_no):
     day = now.strftime("%Y-%m-%d")
     out_dir = os.path.join(DOCS_DIR, day)
     os.makedirs(out_dir, exist_ok=True)
+    for name in os.listdir(out_dir):  # 先清掉当天旧页面，避免历次运行留下重复文件
+        if name.endswith(".html"):
+            os.remove(os.path.join(out_dir, name))
     base = pages_base()
     index_url = ("%s/%s/index.html" % (base, day)) if base else "index.html"
     index = 0
