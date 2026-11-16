@@ -7,7 +7,13 @@ on:
   workflow_dispatch: {}   # 支持在 Actions 页面手动触发一次，方便测试
 
 permissions:
-  contents: write   # 需要把详情页提交回仓库，供 GitHub Pages 托管
+  contents: write   # 把详情页提交回仓库留档
+  pages: write      # 部署到 GitHub Pages
+  id-token: write
+
+concurrency:
+  group: ai-daily
+  cancel-in-progress: false
 
 jobs:
   daily:
@@ -29,7 +35,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python main.py
 
-      - name: 发布详情页
+      - name: 详情页留档
         run: |
           git config user.name "ai-daily-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -41,6 +47,11 @@ jobs:
             git push
           fi
 
+      - name: 上传 Pages 产物
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
       - name: 存档本期 HTML
         if: always()
         uses: actions/upload-artifact@v4
@@ -48,3 +59,13 @@ jobs:
           name: ai-daily-${{ github.run_number }}
           path: output/
           retention-days: 14
+
+  deploy:
+    needs: daily
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
