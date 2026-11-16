@@ -344,7 +344,6 @@ _TRANS_OK = {}
 LLM_KEY = os.environ.get("LLM_API_KEY", "").strip()
 LLM_BASE = (os.environ.get("LLM_BASE") or "https://discovery-api.intern-ai.org.cn/v1").rstrip("/")
 LLM_MODEL = os.environ.get("LLM_MODEL") or "deepseek-v4.1-flash-1017"
-LLM_WORKERS = 2
 # 哪些栏目走大模型（其余走机器翻译）。可用 LLM_SECTIONS 环境变量覆盖，如 github,tech
 LLM_SECTIONS = tuple(s.strip() for s in
                      (os.environ.get("LLM_SECTIONS") or "models,github,industry,tech").split(",") if s.strip())
@@ -383,7 +382,7 @@ def llm_brief(item):
         desc=(item.get("body") or item.get("desc") or item.get("summary") or "")[:2800])
     payload = {"model": LLM_MODEL,
                "messages": [{"role": "user", "content": prompt}],
-               "temperature": 0.3, "max_tokens": 4000}
+               "temperature": 0.3, "max_tokens": 2500}
     for attempt in range(3):
         try:
             raw = fetch(LLM_BASE + "/chat/completions",
@@ -497,12 +496,15 @@ def localize(buckets):
     targets = [it for it in items if it["section"] in LLM_SECTIONS]
     done = set()
     if LLM_KEY and targets:
-        print("  AI 总结 %d/%d 条（%s，栏目 %s）..."
+        print("  AI 总结 %d/%d 条（%s，栏目 %s，串行模式）..."
               % (len(targets), len(items), LLM_MODEL, ",".join(LLM_SECTIONS)), file=sys.stderr)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=LLM_WORKERS) as pool:
-            for item, brief in zip(targets, pool.map(llm_brief, targets)):
-                if brief and apply_brief(item, brief):
-                    done.add(id(item))
+        for idx, item in enumerate(targets, 1):
+            brief = llm_brief(item)
+            if brief and apply_brief(item, brief):
+                done.add(id(item))
+            if idx % 5 == 0:
+                print("    进度 %d/%d，成功 %d" % (idx, len(targets), len(done)), file=sys.stderr)
+            time.sleep(1.5)  # 这个接口并发/频率限制很严，串行并留间隔
         print("  AI 总结成功 %d/%d；其余走机器翻译" % (len(done), len(targets)), file=sys.stderr)
     elif not LLM_KEY:
         print("  ! 未配置 LLM_API_KEY，全部走机器翻译", file=sys.stderr)
