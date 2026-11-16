@@ -346,16 +346,16 @@ LLM_BASE = (os.environ.get("LLM_BASE") or "https://discovery-api.intern-ai.org.c
 LLM_MODEL = os.environ.get("LLM_MODEL") or "deepseek-v4.1-flash-1017"
 LLM_WORKERS = 2
 
-BRIEF_PROMPT = """你是中文科技媒体的值班编辑，把英文 AI 资讯改写成简短中文简报。
+BRIEF_PROMPT = """你是中文科技媒体的值班编辑，把英文 AI 资讯改写成可直接阅读的中文简报。
 来源：{source}（栏目：{section}）
 标题：{title}
 导语：{desc}
 
 只输出 JSON，不要代码块、不要解释：
 {{"title": "中文标题，20 字以内，不用感叹号和营销词",
- "summary": "两句中文摘要，客观陈述事实与关键数字，共 60-90 字",
- "points": ["要点一（20 字内）", "要点二", "要点三"]}}
-导语信息不足时依据标题如实概括，绝不编造数字或评论。"""
+ "summary": "中文摘要，120-200 字，2-4 句：第一句说清发生了什么，第二句补充关键数字/技术细节，第三句说这意味着什么。不要复述标题，不要用「本文」「该文章」这类词",
+ "points": ["要点一（25 字内，具体事实）", "要点二", "要点三"]}}
+导语信息不足时只写导语里有的信息，绝不编造数字或评论。"""
 
 
 def parse_json_loose(text):
@@ -542,12 +542,17 @@ PAPER = "#fbf9f4"
 def render_item(item, now):
     link = esc(item.get("detail_url") or item["link"])
     meta = "%s · %s" % (esc(item["source"]), human_time(item.get("published"), now))
-    summary = clip(item.get("summary", ""), 150)
-    summary_html = ('<div style="font:14px/1.7 %s;color:#4a4438;padding:6px 0 0;">%s</div>'
+    summary = clip(item.get("summary", ""), 260)
+    summary_html = ('<div style="font:14px/1.7 %s;color:#3c372d;padding:7px 0 0;">%s</div>'
                     % (SANS, esc(summary))) if summary else ""
+    points_html = ""
+    if item.get("points"):
+        lis = "".join('<li style="margin:0 0 4px;">%s</li>' % esc(p) for p in item["points"])
+        points_html = ('<ul style="margin:8px 0 0;padding-left:18px;font:13px/1.65 %s;color:#6b6250;">%s</ul>'
+                       % (SANS, lis))
     origin_html = ""
     if item.get("title_en"):
-        origin_html = ('<div style="font:11px/1.5 %s;color:#a89d88;padding:5px 0 0;">原文：%s</div>'
+        origin_html = ('<div style="font:11px/1.5 %s;color:#a89d88;padding:6px 0 0;">原文：%s</div>'
                        % (SANS, esc(clip(item["title_en"], 90))))
     thumb = ""
     if item.get("image"):
@@ -557,23 +562,23 @@ def render_item(item, now):
                  'border:1px solid #e0d9c9;background:#efeade;"></a></td>'
                  % (link, esc(item["image"])))
     return """
-            <tr><td style="padding:16px 30px 16px;border-bottom:1px solid #e8e2d4;">
+            <tr><td style="padding:18px 30px 18px;border-bottom:1px solid #e8e2d4;">
               <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0"><tr>
                 %s
                 <td valign="top">
                   <div style="font:11px/1.4 %s;letter-spacing:.6px;color:#9c9280;text-transform:uppercase;">
                     <span style="color:%s;">■</span>&nbsp;&nbsp;%s</div>
                   <a href="%s" style="text-decoration:none;color:%s;"><div style="font:700 17px/1.5 %s;padding:5px 0 0;">%s</div></a>
-                  %s%s
+                  %s%s%s
                 </td>
               </tr></table>
             </td></tr>""" % (thumb, SANS, RED, meta, link, INK, SERIF, esc(item["title"]),
-                            summary_html, origin_html)
+                            summary_html, points_html, origin_html)
 
 
 def render_headline(item, now):
     link = esc(item.get("detail_url") or item["link"])
-    summary = clip(item.get("summary", ""), 220)
+    summary = clip(item.get("summary", ""), 300)
     origin_html = ""
     if item.get("title_en"):
         origin_html = ('<div style="font:11px/1.5 %s;color:#a89d88;padding:6px 0 0;">原文：%s</div>'
@@ -583,16 +588,21 @@ def render_headline(item, now):
         image_html = ('<div style="padding:14px 0 0;"><a href="%s"><img src="%s" alt="" '
                       'style="width:100%%;max-width:580px;display:block;border:1px solid #ddd5c5;"></a></div>'
                       % (link, esc(item["image"])))
+    points_html = ""
+    if item.get("points"):
+        lis = "".join('<li style="margin:0 0 5px;">%s</li>' % esc(p) for p in item["points"])
+        points_html = ('<ul style="margin:12px 0 0;padding-left:18px;font:13px/1.7 %s;color:#5a5347;">%s</ul>'
+                       % (SANS, lis))
     return """
             <tr><td style="padding:22px 30px 22px;background:#f3efe3;border-top:3px double %s;border-bottom:1px solid #e0d9c9;">
               <div style="font:11px/1.4 %s;letter-spacing:2px;color:%s;font-weight:700;">头条 · HEADLINE</div>
               <a href="%s" style="text-decoration:none;color:%s;"><div style="font:700 27px/1.35 %s;padding:8px 0 0;">%s</div></a>
-              <div style="font:14px/1.75 %s;color:#4a4438;padding:8px 0 0;">%s</div>
-              %s%s
+              <div style="font:14px/1.8 %s;color:#3c372d;padding:8px 0 0;">%s</div>
+              %s%s%s
               <div style="font:11px/1.4 %s;color:#9c9280;padding:8px 0 0;">%s · %s</div>
             </td></tr>""" % (INK, SANS, RED, link, INK, SERIF, esc(item["title"]),
-                            SANS, esc(summary), origin_html, image_html, SANS, esc(item["source"]),
-                            human_time(item.get("published"), now))
+                            SANS, esc(summary), points_html, origin_html, image_html, SANS,
+                            esc(item["source"]), human_time(item.get("published"), now))
 
 
 def render_section(index, title, en, items, now):
@@ -854,7 +864,7 @@ def write_archive_index(now):
     <tr><td style="padding:30px 30px 18px;text-align:center;border-bottom:2px solid #14110f;">
       <div style="font:11px/1.6 %s;letter-spacing:4px;color:#a89d88;">ARCHIVE</div>
       <div style="font:700 38px/1.2 %s;color:#14110f;letter-spacing:3px;padding-top:6px;">AI 日报 · 往期</div>
-      <div style="font:12px/1.6 %s;color:#7d7360;padding-top:8px;">每天北京时间 09:00 自动出刊</div>
+      <div style="font:12px/1.6 %s;color:#7d7360;padding-top:8px;">每天北京时间 08:00 自动出刊</div>
     </td></tr>
     <tr><td style="padding:24px 30px 34px;">
       <ul style="margin:0;padding-left:20px;color:#3c372d;">%s</ul>
