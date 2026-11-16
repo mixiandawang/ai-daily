@@ -51,9 +51,9 @@ FEEDS = [
     ("models", "Google DeepMind", "https://deepmind.google/blog/rss.xml", 1.5),
     ("models", "MIT Tech Review", "https://www.technologyreview.com/topic/artificial-intelligence/feed", 1.3),
     ("models", "Google News AI",
-     "https://news.google.com/rss/search?q=AI+OR+%22large+language+model%22+OR+GPT+OR+Gemini+OR+Claude+when:1d&hl=en-US&gl=US&ceid=US:en", 0.9),
+     "https://news.google.com/rss/search?q=AI+OR+%22large+language+model%22+OR+GPT+OR+Gemini+OR+Claude+when:1d&hl=en-US&gl=US&ceid=US:en", 0.7),
     ("models", "Google News 中文",
-     "https://news.google.com/rss/search?q=%E5%A4%A7%E6%A8%A1%E5%9E%8B+OR+%E6%99%BA%E8%83%BD%E4%BD%93+OR+%E7%94%9F%E6%88%90%E5%BC%8FAI+when:1d&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", 0.9),
+     "https://news.google.com/rss/search?q=%E5%A4%A7%E6%A8%A1%E5%9E%8B+OR+%E6%99%BA%E8%83%BD%E4%BD%93+OR+%E7%94%9F%E6%88%90%E5%BC%8FAI+when:1d&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", 0.7),
     ("industry", "TechCrunch AI", "https://techcrunch.com/category/artificial-intelligence/feed/", 1.3),
     ("industry", "The Verge AI", "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", 1.1),
     ("industry", "VentureBeat AI", "https://venturebeat.com/category/ai/feed/", 1.1),
@@ -380,25 +380,28 @@ def llm_brief(item):
         return None
     prompt = BRIEF_PROMPT.format(
         source=item["source"], section=item["section"], title=item["title"],
-        desc=(item.get("body") or item.get("desc") or item.get("summary") or "")[:3500])
+        desc=(item.get("body") or item.get("desc") or item.get("summary") or "")[:2800])
     payload = {"model": LLM_MODEL,
                "messages": [{"role": "user", "content": prompt}],
                "temperature": 0.3, "max_tokens": 4000}
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             raw = fetch(LLM_BASE + "/chat/completions",
                         headers={"Authorization": "Bearer " + LLM_KEY,
                                  "Content-Type": "application/json"},
-                        data=json.dumps(payload).encode("utf-8"), method="POST", timeout=90)
+                        data=json.dumps(payload).encode("utf-8"), method="POST", timeout=150)
             content = (json.loads(raw.decode("utf-8")).get("choices") or [{}])[0].get("message", {}).get("content") or ""
             return parse_json_loose(content)
         except urllib.error.HTTPError as exc:
-            if exc.code == 429 and attempt < 1:  # 限流：等一会儿再试
-                time.sleep(5)
+            if exc.code == 429 and attempt < 2:  # 限流：退避后重试
+                time.sleep(8 * (attempt + 1))
                 continue
             print("  ! LLM HTTP %s" % exc.code, file=sys.stderr)
             return None
         except Exception as exc:
+            if attempt < 2:  # 读超时也再给一次机会
+                time.sleep(5)
+                continue
             print("  ! LLM %s" % str(exc)[:120], file=sys.stderr)
             return None
     return None
