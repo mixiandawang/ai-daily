@@ -25,6 +25,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -335,10 +336,86 @@ def pick(all_items, now):
     return buckets
 
 
-# ---------------------------------------------------------------- 汉化
+# ---------------------------------------------------------------- 汉化与 AI 总结
 
 _TRANS_CACHE = {}
 _TRANS_OK = {}
+
+LLM_KEY = os.environ.get("LLM_API_KEY", "").strip()
+LLM_BASE = (os.environ.get("LLM_BASE") or "https://discovery-api.intern-ai.org.cn/v1").rstrip("/")
+LLM_MODEL = os.environ.get("LLM_MODEL") or "deepseek-v4.1-flash-1017"
+LLM_WORKERS = 2
+
+BRIEF_PROMPT = """你是中文科技媒体的值班编辑，把英文 AI 资讯改写成简短中文简报。
+来源：{source}（栏目：{section}）
+标题：{title}
+导语：{desc}
+
+只输出 JSON，不要代码块、不要解释：
+{{"title": "中文标题，20 字以内，不用感叹号和营销词",
+ "summary": "两句中文摘要，客观陈述事实与关键数字，共 60-90 字",
+ "points": ["要点一（20 字内）", "要点二", "要点三"]}}
+导语信息不足时依据标题如实概括，绝不编造数字或评论。"""
+
+
+def parse_json_loose(text):
+    text = (text or "").strip()
+    text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.M).strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        return json.loads(text[start:end + 1])
+    except Exception:
+        return None
+
+
+def llm_brief(item):
+    """让大模型写中文标题 / 摘要 / 要点；任何异常都返回 None 走机器翻译兜底。"""
+    if not LLM_KEY:
+        return None
+    prompt = BRIEF_PROMPT.format(
+        source=item["source"], section=item["section"], title=item["title"],
+        desc=(item.get("desc") or item.get("summary") or "")[:800])
+    payload = {"model": LLM_MODEL,
+               "messages": [{"role": "user", "content": prompt}],
+               "temperature": 0.3, "max_tokens": 4000}
+    for attempt in range(3):
+        try:
+            raw = fetch(LLM_BASE + "/chat/completions",
+                        headers={"Authorization": "Bearer " + LLM_KEY,
+                                 "Content-Type": "application/json"},
+                        data=json.dumps(payload).encode("utf-8"), method="POST", timeout=180)
+            content = (json.loads(raw.decode("utf-8")).get("choices") or [{}])[0].get("message", {}).get("content") or ""
+            return parse_json_loose(content)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429 and attempt < 2:  # 限流：等一会儿再试
+                time.sleep(4 * (attempt + 1))
+                continue
+            print("  ! LLM HTTP %s" % exc.code, file=sys.stderr)
+            return None
+        except Exception as exc:
+            print("  ! LLM %s" % str(exc)[:120], file=sys.stderr)
+            return None
+    return None
+
+
+def apply_brief(item, brief):
+    summary = (brief.get("summary") or "").strip()
+    if not summary:
+        return False
+    if item["section"] == "github":  # 仓库名保持英文，只换简介
+        item["summary"] = summary + item.get("suffix", "")
+    else:
+        title = (brief.get("title") or "").strip()
+        if title:
+            item.setdefault("title_en", item["title"])
+            item["title"] = title
+        item["summary"] = summary
+    points = [str(p).strip() for p in (brief.get("points") or []) if str(p).strip()][:3]
+    if points:
+        item["points"] = points
+    return True
 
 
 def has_cjk(text):
@@ -393,17 +470,27 @@ def translate(text):
 
 
 def localize(buckets):
-    for section, items in buckets.items():
-        for item in items:
-            if section == "github":  # 仓库名保留原文，只译简介
-                desc_zh = translate(item.get("desc") or "")
-                item["summary"] = (desc_zh or "暂无简介") + item.get("suffix", "")
-            else:
-                title_zh = translate(item["title"])
-                if title_zh and title_zh != item["title"]:
-                    item["title_en"] = item["title"]
-                    item["title"] = title_zh
-                item["summary"] = translate(item.get("summary") or "")
+    items = [it for its in buckets.values() for it in its]
+    done = set()
+    if LLM_KEY:
+        print("  AI 总结 %d 条（%s）..." % (len(items), LLM_MODEL), file=sys.stderr)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=LLM_WORKERS) as pool:
+            for item, brief in zip(items, pool.map(llm_brief, items)):
+                if brief and apply_brief(item, brief):
+                    done.add(id(item))
+        print("  AI 总结成功 %d/%d" % (len(done), len(items)), file=sys.stderr)
+    for item in items:
+        if id(item) in done:
+            continue
+        if item["section"] == "github":  # 兜底：仓库名保留原文，只译简介
+            desc_zh = translate(item.get("desc") or "")
+            item["summary"] = (desc_zh or "暂无简介") + item.get("suffix", "")
+        else:
+            title_zh = translate(item["title"])
+            if title_zh and title_zh != item["title"]:
+                item["title_en"] = item["title"]
+                item["title"] = title_zh
+            item["summary"] = translate(item.get("summary") or "")
     return buckets
 
 
@@ -668,6 +755,7 @@ DETAIL_TPL = """<!DOCTYPE html>
       <div style="padding-top:12px;font:12px/1.6 -apple-system,sans-serif;color:#9c9280;">{source} · {when}</div>
     </td></tr>
     {image}
+    {points}
     <tr><td style="padding:24px 30px 0;">
       {original}
       <div style="font:15px/1.95 -apple-system,sans-serif;color:#3c372d;">{summary}</div>
@@ -689,6 +777,13 @@ def render_detail(item, section_cn, section_en, now, issue_no, index_url):
         image_html = ('<tr><td style="padding:20px 30px 0;">'
                       '<img src="%s" alt="" style="width:100%%;max-width:580px;display:block;'
                       'border:1px solid #e0d9c9;"></td></tr>' % esc(item["image"]))
+    points_html = ""
+    if item.get("points"):
+        lis = "".join('<li style="margin:0 0 9px;">%s</li>' % esc(p) for p in item["points"])
+        points_html = ('<tr><td style="padding:22px 30px 0;">'
+                       '<div style="font:700 11px/1 -apple-system,sans-serif;letter-spacing:2px;color:#b5322a;">要点</div>'
+                       '<ul style="margin:10px 0 0;padding-left:20px;font:14px/1.8 -apple-system,sans-serif;'
+                       'color:#3c372d;">%s</ul></td></tr>' % lis)
     original_html = ""
     if item.get("title_en"):
         original_html = ('<div style="font:12px/1.7 -apple-system,sans-serif;color:#9c9280;'
@@ -704,6 +799,7 @@ def render_detail(item, section_cn, section_en, now, issue_no, index_url):
         source=esc(item["source"]),
         when=human_time(item.get("published"), now),
         image=image_html,
+        points=points_html,
         original=original_html,
         summary=summary,
         orig=esc(item["link"]),
