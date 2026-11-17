@@ -2,8 +2,10 @@ name: AI 日报
 
 on:
   schedule:
-    # UTC 00:00 = 北京时间 08:00（GitHub 定时任务可能延迟几分钟到十几分钟）
-    - cron: "0 0 * * *"
+    # 北京时间 08:13 / 08:43，两次机会。刻意避开整点：GitHub 在整点调度压力最大，
+    # 0 分开始的 cron 最容易被延迟甚至整次丢弃。
+    - cron: "13 0 * * *"
+    - cron: "43 0 * * *"
   workflow_dispatch: {}   # 支持在 Actions 页面手动触发一次，方便测试
 
 permissions:
@@ -33,7 +35,13 @@ jobs:
           MAIL_TO: ${{ secrets.MAIL_TO }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python main.py
+        run: |
+          DAY=$(TZ=Asia/Shanghai date +%F)
+          if [ "${{ github.event_name }}" = "schedule" ] && [ -f "docs/$DAY/index.html" ]; then
+            echo "今天（$DAY）已经出刊，跳过这次定时运行，避免一天发两封"
+            exit 0
+          fi
+          python main.py
 
       - name: 详情页留档
         run: |
