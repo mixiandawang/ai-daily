@@ -2,8 +2,8 @@ name: AI 日报
 
 on:
   schedule:
-    # 临时改为每 5 分钟，用于验证 GitHub 定时调度是否生效（验证完改回 0 0 * * *）
-    - cron: "*/5 * * * *"
+    # UTC 00:00 = 北京时间 08:00（GitHub 定时任务可能延迟几分钟到十几分钟）
+    - cron: "0 0 * * *"
   workflow_dispatch: {}   # 支持在 Actions 页面手动触发一次，方便测试
 
 permissions:
