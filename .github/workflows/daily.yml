@@ -7,6 +7,8 @@ on:
     - cron: "13 0 * * *"
     - cron: "43 0 * * *"
   workflow_dispatch: {}   # 支持在 Actions 页面手动触发一次，方便测试
+  push:
+    branches: [main]      # 当天还没出刊时，任何一次代码提交也会顺手补发
 
 permissions:
   contents: write   # 把详情页提交回仓库留档
@@ -37,8 +39,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           DAY=$(TZ=Asia/Shanghai date +%F)
-          if [ "${{ github.event_name }}" = "schedule" ] && [ -f "docs/$DAY/index.html" ]; then
-            echo "今天（$DAY）已经出刊，跳过这次定时运行，避免一天发两封"
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ] && [ -f "docs/$DAY/index.html" ]; then
+            echo "今天（$DAY）已经出刊，跳过这次自动运行，避免一天发两封"
             exit 0
           fi
           python main.py
