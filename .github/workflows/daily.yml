@@ -1,16 +1,10 @@
 name: AI 日报
 
 on:
-  schedule:
-    # 实测：cron 写 00:13 UTC（北京 08:13），GitHub 实际到 07:1x UTC（北京 15:1x）才执行，
-    # 每天稳定晚 7 小时左右。所以前后各挂一组，让「晚 7 小时」和「准点」两种情况下都有一发命中早上：
-    #   17:13/17:43 UTC -> 准点=北京 01:13（被下面的时间窗拦掉）；晚 7 小时=北京 08:13 ✓
-    #   00:13/00:43 UTC -> 准点=北京 08:13 ✓；晚 7 小时=北京 15:13（当天已出刊则跳过）
-    - cron: "13 17 * * *"
-    - cron: "43 17 * * *"
-    - cron: "13 0 * * *"
-    - cron: "43 0 * * *"
-  workflow_dispatch: {}   # 支持在 Actions 页面手动触发一次，方便测试
+  # GitHub 自带的定时器已取消：它每天只在这个仓库的两个窗口批量执行
+  # （北京 06:1x-06:5x / 14:5x），延迟 4.5~7.3 小时且不稳定，定不到早上 8 点。
+  # 需要自动出刊时，用外部定时器调 workflow_dispatch 接口（或直接在这里手动 Run）。
+  workflow_dispatch: {}   # 手动触发：Actions 页面「Run workflow」/ 外部定时器调 API
   push:
     branches: [main]      # 当天还没出刊时，任何一次代码提交也会顺手补发
 
@@ -43,11 +37,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           DAY=$(TZ=Asia/Shanghai date +%F)
-          HOUR=$(TZ=Asia/Shanghai date +%-H)
-          if [ "${{ github.event_name }}" != "workflow_dispatch" ] && [ "$HOUR" -lt 7 ]; then
-            echo "北京时间 $(TZ=Asia/Shanghai date '+%H:%M')，还没到早上，跳过（等早间那一次运行）"
-            exit 0
-          fi
           if [ "${{ github.event_name }}" != "workflow_dispatch" ] && [ -f "docs/$DAY/index.html" ]; then
             echo "今天（$DAY）已经出刊，跳过这次自动运行，避免一天发两封"
             exit 0
